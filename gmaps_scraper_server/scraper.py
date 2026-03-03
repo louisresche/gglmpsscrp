@@ -131,6 +131,31 @@ async def scrape_google_maps(query, max_places=None, lang="en", headless=True, c
             await page.goto('https://www.google.com/maps', wait_until='domcontentloaded')
             await asyncio.sleep(random_delay(3.0, 5.0))  # Give page time to fully load
 
+            # --- Handle potential consent forms (must be done BEFORE searching) ---
+            try:
+                consent_xpath = "//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Reject all') or contains(text(), 'Tout accepter') or contains(text(), 'Tout refuser') or contains(text(), 'Aceptar todo') or contains(text(), 'Rechazar todo') or contains(text(), 'Accept')]] | //input[@type='submit' and ((@value='Accept all') or (@value='Reject all') or (@value='Tout accepter') or (@value='Tout refuser') or (@value='Aceptar todo') or (@value='Rechazar todo'))]"
+
+                # Wait briefly for the button to potentially appear
+                await page.wait_for_selector(consent_xpath, state='visible', timeout=5000)
+
+                # Prioritize "Accept all" / "Tout accepter" / "Aceptar todo"
+                accept_button = await page.query_selector("//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Tout accepter') or contains(text(), 'Aceptar todo')]] | //input[@type='submit' and ((@value='Accept all') or (@value='Tout accepter') or (@value='Aceptar todo'))]")
+                if accept_button:
+                    logger.info("Accepting consent form...")
+                    await accept_button.click()
+                else:
+                    # Fallback
+                    logger.info("Clicking available consent button...")
+                    await page.locator(consent_xpath).first.click()
+
+                # Wait for navigation/popup closure
+                await page.wait_for_load_state('networkidle', timeout=5000)
+                await asyncio.sleep(random_delay(1.0, 2.0))
+            except PlaywrightTimeoutError:
+                logger.debug("No consent form detected or timed out waiting.")
+            except Exception as e:
+                logger.warning(f"Error handling consent form: {e}")
+
             # Find and use the search box
             logger.info(f"Typing search query: {query}")
             try:
@@ -170,31 +195,6 @@ async def scrape_google_maps(query, max_places=None, lang="en", headless=True, c
                 logger.error(f"Error performing search: {e}")
                 await browser.close()
                 return []
-
-            # --- Handle potential consent forms ---
-            try:
-                # Expanded consent xpath to include Spanish and input elements (from PR #7)
-                consent_xpath = "//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Reject all') or contains(text(), 'Aceptar todo') or contains(text(), 'Rechazar todo') or contains(text(), 'Accept')]] | //input[@type='submit' and (@value='Accept all' or @value='Reject all' or @value='Aceptar todo' or @value='Rechazar todo')]"
-
-                # Wait briefly for the button to potentially appear
-                await page.wait_for_selector(consent_xpath, state='visible', timeout=5000)
-
-                # Prioritize "Accept all" / "Aceptar todo"
-                accept_button = await page.query_selector("//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Aceptar todo')]] | //input[@type='submit' and (@value='Accept all' or @value='Aceptar todo')]")
-                if accept_button:
-                    logger.info("Accepting consent form...")
-                    await accept_button.click()
-                else:
-                    # Fallback
-                    logger.info("Clicking available consent button...")
-                    await page.locator(consent_xpath).first.click()
-
-                # Wait for navigation/popup closure
-                await page.wait_for_load_state('networkidle', timeout=5000)
-            except PlaywrightTimeoutError:
-                logger.debug("No consent form detected or timed out waiting.")
-            except Exception as e:
-                logger.warning(f"Error handling consent form: {e}")
 
 
             # --- Scrolling and Link Extraction ---
@@ -250,7 +250,7 @@ async def scrape_google_maps(query, max_places=None, lang="en", headless=True, c
                     if new_height == last_height:
                         # Check for the "end of results" marker
                         # Check for end marker in multiple languages (PR #7)
-                        end_marker_xpath = "//span[contains(text(), \"You've reached the end of the list.\") or contains(text(), \"Has llegado al final de la lista\")]"
+                        end_marker_xpath = "//span[contains(text(), \"You've reached the end of the list.\") or contains(text(), \"Has llegado al final de la lista\") or contains(text(), \"Vous avez atteint la fin de la liste\")]"
                         if await page.locator(end_marker_xpath).count() > 0:
                             logger.info("Reached the end of the results list.")
                             break
