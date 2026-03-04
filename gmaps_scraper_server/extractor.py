@@ -125,8 +125,8 @@ def clean_html_text(text):
         return None
     # Remove HTML tags
     text = re.sub(r'<[^>]+>', '', text)
-    # Decode HTML entities
-    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+    # Decode HTML entities (including &nbsp;)
+    text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
     # Clean whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     return text if text else None
@@ -210,21 +210,32 @@ def get_gps_coordinates(html_content, metadata):
 
 def get_complete_address(html_content):
     """Extracts the complete address from HTML."""
-    # STABLE: Try semantic selectors first (accessibility attributes)
+    # UI noise patterns to reject false positives
+    noise_pattern = re.compile(
+        r'thèmes?|horaires?|ouvert|fermé|lun\.|mar\.|mer\.|jeu\.|ven\.|sam\.|dim\.|'
+        r'autres|topics?|hours?|open|closed|mon\.|tue\.|wed\.|thu\.|fri\.|sat\.|sun\.',
+        re.IGNORECASE
+    )
+
     patterns = [
-        r'aria-label="Address:\s*([^"]+)"',  # HIGHLY STABLE - accessibility required
-        r'data-item-id="address"[^>]*aria-label="([^"]+)"',  # STABLE - semantic + aria-label
-        r'button[^>]*data-item-id="address"[^>]*>([^<]+)<',  # STABLE - semantic selector
-        r'"formatted_address"\s*:\s*"([^"]+)"',  # MODERATE - JSON-like pattern
-        r'button[^>]*aria-label="[^"]*([0-9]+[^",]{15,80})"',  # MODERATE - generic pattern
+        # HIGHLY STABLE - multilingual aria-label (EN, FR, ES, IT, PT, DE, NL)
+        r'aria-label="(?:Address|Adresse|Dirección|Indirizzo|Endereço|Adres|Adresa)[\s:]+([^"]+)"',
+        # STABLE - aria-label before data-item-id (attribute order variant)
+        r'aria-label="([^"]+)"\s[^>]*data-item-id="address"',
+        # STABLE - data-item-id before aria-label
+        r'data-item-id="address"[^>]*aria-label="([^"]+)"',
+        # STABLE - button text content with data-item-id
+        r'button[^>]*data-item-id="address"[^>]*>([^<]+)<',
+        # MODERATE - JSON-like pattern
+        r'"formatted_address"\s*:\s*"([^"]+)"',
     ]
 
     for pattern in patterns:
         address = extract_from_html(html_content, pattern, 1)
         if address:
             cleaned = clean_html_text(address)
-            # Validate it looks like an address (has some numbers and letters)
-            if cleaned and len(cleaned) > 10 and re.search(r'\d', cleaned):
+            # Validate: must have a digit, be long enough, and not be UI noise
+            if cleaned and len(cleaned) > 5 and re.search(r'\d', cleaned) and not noise_pattern.search(cleaned):
                 return cleaned
 
     return None
